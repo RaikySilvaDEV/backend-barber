@@ -1,10 +1,10 @@
 {
-  "name": "api",
+  "name": "backend",
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
+  "type": "module",     
   "scripts": {
-    "type": "module",
     "start": "node server.js",
     "tunnel": "ngrok http 3000",
     "dev": "concurrently \"npm run start\" \"npm run tunnel\""
