@@ -105,7 +105,7 @@ app.post("/api/pix", async (req, res) => {
 // 🟣 WEBHOOK CORRIGIDO (SEM ASSINATURA!)
 // Mercado Pago PIX NÃO envia x-signature.
 // =========================================================
-app.post("/api/webhook", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     console.log("📩 WEBHOOK RECEBIDO:", req.body);
 
