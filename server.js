@@ -68,8 +68,10 @@ app.post("/api/pix", async (req, res) => {
       description: descricao || `Pagamento venda #${sale_id}`,
       payment_method_id: "pix",
 
-      // 🔥 ESSENCIAL
+      // 🔥 ESSENCIAL PARA SABER QUAL VENDA FOI PAGA
       external_reference: `SALE_${sale_id}`,
+      // 🔥 URL DO WEBHOOK NO RAILWAY
+      notification_url: "https://backend-barber.up.railway.app/api/webhook",
 
       payer: { email: "cliente@exemplo.com" },
     };
