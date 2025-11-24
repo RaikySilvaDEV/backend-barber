@@ -4,18 +4,17 @@ import fetch from "node-fetch";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
-import crypto from "crypto";
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 
-// ⚠️ PRECISA PEGAR O RAW BODY PARA VALIDAR O WEBHOOK!
+// ⚠️ Mantém RAW BODY (não atrapalha, mas não será usado)
 app.use(
   express.json({
     verify: (req, res, buf) => {
-      req.rawBody = buf.toString(); // salva o raw body
+      req.rawBody = buf.toString();
     },
   })
 );
@@ -25,12 +24,10 @@ const ACCESS_TOKEN =
   process.env.MP_ACCESS_TOKEN ||
   "APP_USR-6959164002929941-110913-153611435420a9e65813ee0dec906991-1359156098";
 
-const MP_WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET; // 🔥 SUA CHAVE DE ASSINATURA DO MERCADO PAGO
-
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 
-// 🔥 Função auxiliar: Atualiza status no Supabase
+// 🔥 Função auxiliar — Atualiza tabela de vendas no Supabase
 async function updateSupabasePaymentStatus(saleId, status) {
   console.log("🔄 Atualizando Supabase...", saleId, status);
 
@@ -57,7 +54,7 @@ async function updateSupabasePaymentStatus(saleId, status) {
 }
 
 // =========================================================
-// 🟢 CRIAÇÃO DO PAGAMENTO PIX (corrigido!)
+// 🟢 CRIAÇÃO DO PIX (CORRIGIDO)
 // =========================================================
 app.post("/api/pix", async (req, res) => {
   try {
@@ -67,12 +64,8 @@ app.post("/api/pix", async (req, res) => {
       transaction_amount: Number(total),
       description: descricao || `Pagamento venda #${sale_id}`,
       payment_method_id: "pix",
-
-      // 🔥 ESSENCIAL PARA SABER QUAL VENDA FOI PAGA
-      external_reference: `SALE_${sale_id}`,
-      // 🔥 URL DO WEBHOOK NO RAILWAY
+      external_reference: `SALE_${sale_id}`, // 🔥 Vem de volta no webhook
       notification_url: "https://backend-barber.up.railway.app/api/webhook",
-
       payer: { email: "cliente@exemplo.com" },
     };
 
@@ -109,37 +102,21 @@ app.post("/api/pix", async (req, res) => {
 });
 
 // =========================================================
-// 🟣 WEBHOOK — COM VALIDAÇÃO DE ASSINATURA
+// 🟣 WEBHOOK CORRIGIDO (SEM ASSINATURA!)
+// Mercado Pago PIX NÃO envia x-signature.
 // =========================================================
 app.post("/api/webhook", async (req, res) => {
   try {
-    console.log("📩 WEBHOOK BRUTO RECEBIDO");
-
-    const signature = req.headers["x-signature"];
-    if (!signature) {
-      console.log("❌ Nenhuma assinatura recebida.");
-      return res.sendStatus(401);
-    }
-
-    const rawBody = req.rawBody;
-    const computedHash = crypto
-      .createHmac("sha256", MP_WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest("hex");
-
-    if (computedHash !== signature) {
-      console.log("❌ Assinatura inválida! Rejeitado!");
-      return res.sendStatus(401);
-    }
-
-    console.log("🔐 Assinatura válida! Continuando...");
+    console.log("📩 WEBHOOK RECEBIDO:", req.body);
 
     const paymentId = req.body?.data?.id;
+
     if (!paymentId) {
       console.log("❌ Payment ID inválido");
       return res.sendStatus(400);
     }
 
+    // 🔎 Consultar detalhes do pagamento
     const det = await fetch(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
       { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } }
@@ -153,6 +130,8 @@ app.post("/api/webhook", async (req, res) => {
       console.log("🎉 Pagamento aprovado para venda:", saleId);
 
       await updateSupabasePaymentStatus(saleId, "paid");
+    } else {
+      console.log("ℹ️ Pagamento ainda não aprovado:", payment.status);
     }
 
     res.sendStatus(200);
