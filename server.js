@@ -4,17 +4,28 @@ import fetch from "node-fetch";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
+import crypto from "crypto";
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// ⚠️ PRECISA PEGAR O RAW BODY PARA VALIDAR O WEBHOOK!
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString(); // salva o raw body
+    },
+  })
+);
 
 // ⚙️ Configurações
 const ACCESS_TOKEN =
   process.env.MP_ACCESS_TOKEN ||
   "APP_USR-6959164002929941-110913-153611435420a9e65813ee0dec906991-1359156098";
+
+const MP_WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET; // 🔥 SUA CHAVE DE ASSINATURA DO MERCADO PAGO
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
@@ -40,7 +51,6 @@ async function updateSupabasePaymentStatus(saleId, status) {
 
     const resData = await response.text();
     console.log("📡 Resposta Supabase:", resData);
-
   } catch (error) {
     console.error("❌ Erro ao atualizar Supabase:", error);
   }
@@ -57,13 +67,11 @@ app.post("/api/pix", async (req, res) => {
       transaction_amount: Number(total),
       description: descricao || `Pagamento venda #${sale_id}`,
       payment_method_id: "pix",
-      
-      // 🔥 INFORMAÇÃO ESSENCIAL
+
+      // 🔥 ESSENCIAL
       external_reference: `SALE_${sale_id}`,
 
-      payer: {
-        email: "cliente@exemplo.com",
-      },
+      payer: { email: "cliente@exemplo.com" },
     };
 
     const idemKey = uuidv4();
@@ -82,9 +90,7 @@ app.post("/api/pix", async (req, res) => {
     const data = await response.json();
     console.log("🔍 Resposta Mercado Pago:", data);
 
-    if (!response.ok) {
-      return res.status(400).json(data);
-    }
+    if (!response.ok) return res.status(400).json(data);
 
     const pix = data.point_of_interaction.transaction_data;
 
@@ -101,34 +107,50 @@ app.post("/api/pix", async (req, res) => {
 });
 
 // =========================================================
-// 🟣 WEBHOOK — AGORA CORRIGIDO!
+// 🟣 WEBHOOK — COM VALIDAÇÃO DE ASSINATURA
 // =========================================================
 app.post("/api/webhook", async (req, res) => {
   try {
-    console.log("📩 WEBHOOK RECEBIDO:", req.body);
+    console.log("📩 WEBHOOK BRUTO RECEBIDO");
+
+    const signature = req.headers["x-signature"];
+    if (!signature) {
+      console.log("❌ Nenhuma assinatura recebida.");
+      return res.sendStatus(401);
+    }
+
+    const rawBody = req.rawBody;
+    const computedHash = crypto
+      .createHmac("sha256", MP_WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest("hex");
+
+    if (computedHash !== signature) {
+      console.log("❌ Assinatura inválida! Rejeitado!");
+      return res.sendStatus(401);
+    }
+
+    console.log("🔐 Assinatura válida! Continuando...");
 
     const paymentId = req.body?.data?.id;
-    if (!paymentId) return res.status(400).send("Payment ID inválido");
+    if (!paymentId) {
+      console.log("❌ Payment ID inválido");
+      return res.sendStatus(400);
+    }
 
-    // 🔍 Busca detalhes do pagamento
     const det = await fetch(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
       { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } }
     );
-    const payment = await det.json();
 
+    const payment = await det.json();
     console.log("💰 Detalhes do pagamento:", payment);
 
     if (payment.status === "approved") {
-      console.log("🎉 Pagamento aprovado:", payment.id);
-
-      // 🔥 Puxa sale_id corretamente
       const saleId = payment.external_reference.replace("SALE_", "");
-      console.log("📦 Venda identificada:", saleId);
+      console.log("🎉 Pagamento aprovado para venda:", saleId);
 
       await updateSupabasePaymentStatus(saleId, "paid");
-    } else {
-      console.log("⏳ Status:", payment.status);
     }
 
     res.sendStatus(200);
