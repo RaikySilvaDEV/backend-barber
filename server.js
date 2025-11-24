@@ -21,54 +21,53 @@ const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 
 // 🔥 Função auxiliar: Atualiza status no Supabase
 async function updateSupabasePaymentStatus(saleId, status) {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
-    console.warn("⚠️ Variáveis do Supabase não configuradas no .env");
-    return;
-  }
+  console.log("🔄 Atualizando Supabase...", saleId, status);
 
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/sales?id=eq.${saleId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: SUPABASE_SERVICE_ROLE,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE}`,
-       "Prefer": "return=representation" // ✅ recomendado para ver resposta
-      },
-      body: JSON.stringify({ payment_status: status }),
-    });
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/sales?id=eq.${saleId}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_SERVICE_ROLE,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE}`,
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify({ payment_status: status }),
+      }
+    );
 
-    if (response.ok) {
-      console.log(`✅ Venda ${saleId} atualizada para ${status} no Supabase`);
-    } else {
-      const err = await response.text();
-      console.error("❌ Erro ao atualizar Supabase:", err);
-    }
+    const resData = await response.text();
+    console.log("📡 Resposta Supabase:", resData);
+
   } catch (error) {
-    console.error("❌ Erro no updateSupabasePaymentStatus:", error);
+    console.error("❌ Erro ao atualizar Supabase:", error);
   }
 }
 
 // =========================================================
-// 🟢 CRIAÇÃO DO PAGAMENTO PIX (mantido e funcional)
+// 🟢 CRIAÇÃO DO PAGAMENTO PIX (corrigido!)
 // =========================================================
 app.post("/api/pix", async (req, res) => {
   try {
     const { total, descricao, sale_id } = req.body;
 
-    if (!total || isNaN(total)) {
-      return res.status(400).json({ error: "Valor inválido para total" });
-    }
-
     const payload = {
       transaction_amount: Number(total),
       description: descricao || `Pagamento venda #${sale_id}`,
       payment_method_id: "pix",
-      payer: { email: "cliente@exemplo.com" },
+      
+      // 🔥 INFORMAÇÃO ESSENCIAL
+      external_reference: `SALE_${sale_id}`,
+
+      payer: {
+        email: "cliente@exemplo.com",
+      },
     };
 
     const idemKey = uuidv4();
-    console.log("📦 Criando PIX com X-Idempotency-Key:", idemKey);
+    console.log("📦 Criando PIX:", idemKey, payload);
 
     const response = await fetch("https://api.mercadopago.com/v1/payments", {
       method: "POST",
@@ -81,10 +80,10 @@ app.post("/api/pix", async (req, res) => {
     });
 
     const data = await response.json();
+    console.log("🔍 Resposta Mercado Pago:", data);
 
     if (!response.ok) {
-      console.error("❌ Erro Mercado Pago:", data);
-      return res.status(response.status).json(data);
+      return res.status(400).json(data);
     }
 
     const pix = data.point_of_interaction.transaction_data;
@@ -93,7 +92,6 @@ app.post("/api/pix", async (req, res) => {
       qrCode: pix.qr_code_base64,
       copiaECola: pix.qr_code,
       id: data.id,
-      status: data.status,
       sale_id,
     });
   } catch (err) {
@@ -103,51 +101,40 @@ app.post("/api/pix", async (req, res) => {
 });
 
 // =========================================================
-// 🟣 WEBHOOK DO MERCADO PAGO → Verificação Automática
+// 🟣 WEBHOOK — AGORA CORRIGIDO!
 // =========================================================
 app.post("/api/webhook", async (req, res) => {
   try {
-    console.log("📩 Webhook recebido:", req.body);
+    console.log("📩 WEBHOOK RECEBIDO:", req.body);
 
     const paymentId = req.body?.data?.id;
-    if (!paymentId) {
-      return res.status(400).json({ error: "ID de pagamento não encontrado" });
-    }
+    if (!paymentId) return res.status(400).send("Payment ID inválido");
 
-    // 🔎 Busca detalhes do pagamento
-    const paymentResponse = await fetch(
+    // 🔍 Busca detalhes do pagamento
+    const det = await fetch(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
-        },
-      }
+      { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } }
     );
+    const payment = await det.json();
 
-    const payment = await paymentResponse.json();
     console.log("💰 Detalhes do pagamento:", payment);
 
-    // ✅ Pagamento aprovado
     if (payment.status === "approved") {
-      console.log(`✅ Pagamento aprovado! ID: ${payment.id}`);
+      console.log("🎉 Pagamento aprovado:", payment.id);
 
-      // Extrai o número da venda do campo "description"
-      const saleMatch = payment.description.match(/#(\d+)/);
-      const saleId = saleMatch ? saleMatch[1] : null;
+      // 🔥 Puxa sale_id corretamente
+      const saleId = payment.external_reference.replace("SALE_", "");
+      console.log("📦 Venda identificada:", saleId);
 
-      if (saleId) {
-        await updateSupabasePaymentStatus(saleId, "paid");
-      } else {
-        console.warn("⚠️ Não foi possível identificar o sale_id na descrição.");
-      }
+      await updateSupabasePaymentStatus(saleId, "paid");
     } else {
-      console.log(`⏳ Status atual: ${payment.status}`);
+      console.log("⏳ Status:", payment.status);
     }
 
     res.sendStatus(200);
-  } catch (error) {
-    console.error("❌ Erro ao processar webhook:", error);
-    res.status(500).json({ error: "Erro ao processar webhook" });
+  } catch (err) {
+    console.error("❌ Erro no webhook:", err);
+    res.sendStatus(500);
   }
 });
 
@@ -155,11 +142,12 @@ app.post("/api/webhook", async (req, res) => {
 // 🧭 Health Check
 // =========================================================
 app.get("/", (req, res) => {
-  res.send("🚀 Servidor PIX + Webhook ativo e funcional!");
+  res.send("🚀 Servidor PIX + Webhook ativo!");
 });
 
 // =========================================================
-const PORT = process.env.PORT || 3000; // Usa a porta do Railway, ou 3000 local
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`)
+);
+// =========================================================
