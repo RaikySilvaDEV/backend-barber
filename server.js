@@ -129,7 +129,7 @@ app.post("/webhook", async (req, res) => {
       const saleId = payment.external_reference.replace("SALE_", "");
       console.log("🎉 Pagamento aprovado para venda:", saleId);
 
-      await updateSupabasePaymentStatus(saleId, "paid");
+      await updateSupabasePaymentStatus(saleId, "Pago aprovado");
     } else {
       console.log("ℹ️ Pagamento ainda não aprovado:", payment.status);
     }
